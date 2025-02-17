@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: mongo-namespace
+spec:
+  serviceName: "mongodb-service"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      terminationGracePeriodSeconds: 10
+      
+      containers:
+        - name: mongo
+          image: mongo:6.0.11
+          imagePullPolicy: IfNotPresent
+          args:
+            - '--dbpath'
+            - /data/db
+          command:
+            - "mongod"
+            - "--replSet"
+            - "rs0"
+            - "--bind_ip"
+            - "0.0.0.0"
+            
+          ports:
+            - containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-credentials
+                  key: username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-credentials
+                  key: password
+          volumeMounts:
+            - name: mongo-data-v1
+              mountPath: /data/db     
+        
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data-v1
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+        storageClassName: storageclass-azure-disk

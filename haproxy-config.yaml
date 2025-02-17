@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+data:
+  haproxy.cfg: |
+    global
+        log stdout format raw local0
+        maxconn 5000
+
+    defaults
+        log     global
+        timeout connect 10s
+        timeout client 30s
+        timeout server 30s
+        option  tcpka
+        option  tcplog
+
+    frontend mongodb
+        bind *:9292
+        mode tcp
+
+        # Detect Read and Write requests
+        acl is_read req.payload(0,24) -m bin 3E0000000D00000061000000040000000101
+        use_backend mongo_read if is_read
+        default_backend mongo_write
+
+    backend mongo_write
+        mode tcp
+        option tcp-check
+        balance first
+
+        # Check which node is PRIMARY dynamically
+        tcp-check send-binary 3a000000          # Message Length (58)
+        tcp-check send-binary EEEEEEEE          # Request ID (random)
+        tcp-check send-binary 00000000          # Response To (nothing)
+        tcp-check send-binary d4070000          # OpCode (Query)
+        tcp-check send-binary 00000000          # Query Flags
+        tcp-check send-binary 61646d696e2e      # fullCollectionName (admin.$cmd)
+        tcp-check send-binary 24636d6400        # continued
+        tcp-check send-binary 00000000          # NumToSkip
+        tcp-check send-binary FFFFFFFF          # NumToReturn
+        # Start of Document
+        tcp-check send-binary 13000000          # Document Length (19)
+        tcp-check send-binary 10                # Type (Int32)
+        tcp-check send-binary 69736d617374657200 # ismaster:
+        tcp-check send-binary 01000000          # Value : 1
+        tcp-check send-binary 00                # Termination
+
+        # Expecting 'ismaster: true' in response
+        tcp-check expect binary 69736d61737465720001
+
+        # Dynamically route writes to the PRIMARY node
+        server mongodb-0 mongodb-0.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 2s rise 2 fall 3
+        server mongodb-1 mongodb-1.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 2s rise 2 fall 3
+        server mongodb-2 mongodb-2.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 2s rise 2 fall 3
+
+    backend mongo_read
+        mode tcp
+        option tcp-check
+        balance roundrobin
+
+        # Distribute reads across SECONDARY nodes
+        server mongodb-1 mongodb-1.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 3s
+        server mongodb-2 mongodb-2.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 3s
+        server mongodb-0 mongodb-0.mongodb-service.mongo-namespace.svc.cluster.local:27017 check inter 3s backup
+
+
